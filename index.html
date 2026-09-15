@@ -1238,7 +1238,7 @@ function renderRecommendations(){
     if(ratio>=15) items.push({icon:'📊', text:`Le coût cumulé (hors achat) atteint ${ratio.toFixed(0)}% du prix d'achat (${fmtMAD(totalAll)}) — à prendre en compte pour fixer un prix de revente réaliste.`});
   }
 
-  const lastMaint = [...maint].sort((a,b)=>b.date.localeCompare(a.date))[0];
+  const lastMaint = lastMaintWithProchain();
   if(lastMaint && lastMaint.prochainKm){
     const currentKm = fc.length ? fc[fc.length-1].km : vehicle.kmInitial;
     if(lastMaint.prochainKm - currentKm <= 500 && lastMaint.prochainKm - currentKm > 0){
@@ -1423,6 +1423,9 @@ function renderHeader(){
   } else { document.getElementById('statAge').textContent = '—'; }
 }
 
+function lastMaintWithProchain(){
+  return [...maint].filter(m=>m.prochainKm || m.prochainDate).sort((a,b)=>b.date.localeCompare(a.date))[0] || null;
+}
 function renderAlerts(){
   const el = document.getElementById('alertsList'); el.innerHTML='';
   const items = [];
@@ -1440,7 +1443,7 @@ function renderAlerts(){
   pushDateAlert('Vignette', reminders.vignette.date);
   pushDateAlert('Contrôle technique', reminders.controle.date);
 
-  const lastMaint = [...maint].sort((a,b)=>b.date.localeCompare(a.date))[0];
+  const lastMaint = lastMaintWithProchain();
   if(lastMaint && (lastMaint.prochainKm || lastMaint.prochainDate)){
     const fc = fuelWithCalc();
     const currentKm = fc.length ? fc[fc.length-1].km : vehicle.kmInitial;
