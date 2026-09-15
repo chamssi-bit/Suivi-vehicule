@@ -208,6 +208,12 @@
     #saleReport{ position:absolute; top:0; left:0; width:100%; display:block; padding:20px; }
     .lightbox{ display:none !important; }
   }
+
+  .checklist-row{ display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid #DDD3B9; font-size:13.5px; }
+  .checklist-row:last-child{ border-bottom:none; }
+  .checklist-row input[type=checkbox]{ width:17px; height:17px; flex-shrink:0; }
+  .checklist-row .cl-label{ flex:1; }
+  .checklist-row .cl-auto{ font-size:11px; color:var(--ink-soft); }
 </style>
 </head>
 <body>
@@ -427,6 +433,12 @@
           <tbody id="docTable"></tbody>
         </table></div>
         <div class="empty" id="docEmpty" style="display:none;">Aucun document enregistré pour l'instant.</div>
+      </div>
+
+      <div class="panel">
+        <h2>Checklist vente</h2>
+        <div class="sub">Ce qu'il faut réunir pour vendre le véhicule sans blocage administratif. Les 3 premiers se cochent automatiquement d'après tes documents.</div>
+        <div id="saleChecklistList"></div>
       </div>
 
       <div class="panel">
@@ -684,6 +696,7 @@ async function loadVehicleData(){
   try{ const r = await storageGet(keyFor('charges-entries')); charges = r ? JSON.parse(r.value) : (useSeed?SEED_CHARGES:[]); }catch(e){ charges = useSeed?SEED_CHARGES:[]; }
   try{ const r = await storageGet(keyFor('entretien-entries')); maint = r ? JSON.parse(r.value) : (useSeed?SEED_MAINT:[]); }catch(e){ maint = useSeed?SEED_MAINT:[]; }
   try{ const r = await storageGet(keyFor('documents-entries')); documents = r ? JSON.parse(r.value) : []; }catch(e){ documents = []; }
+  try{ const r = await storageGet(keyFor('sale-checklist')); saleChecklist = r ? JSON.parse(r.value) : {}; }catch(e){ saleChecklist = {}; }
   try{ const r = await storageGet(keyFor('photos-entries')); photos = r ? JSON.parse(r.value) : []; }catch(e){ photos = []; }
 
   if(useSeed && fuel===SEED_FUEL) await persistV('carburant-entries', fuel);
@@ -998,6 +1011,50 @@ function closeLightbox(ev){
 
 // ---- Documents ----
 let documents = [];
+let saleChecklist = {};
+const SALE_CHECKLIST_AUTO = [
+  { key:'vignette', label:'Vignette de l\'année en cours payée', docType:'Vignette' },
+  { key:'assurance', label:'Assurance en cours de validité', docType:'Assurance' },
+  { key:'controle', label:'Contrôle technique valide', docType:'Contrôle technique' }
+];
+const SALE_CHECKLIST_MANUAL = [
+  { key:'cartegrise', label:'Carte grise originale disponible et à jour' },
+  { key:'contrat', label:'Certificat de vente préparé (3 exemplaires, signatures légalisées)' },
+  { key:'nongage', label:'Attestation de non-gage obtenue (véhicule libre de tout crédit)' },
+  { key:'cin', label:'Copie CIN du vendeur prête' },
+  { key:'cles', label:'Double des clés disponible pour l\'acheteur' },
+  { key:'dossier', label:"Dossier d'entretien remis à l'acheteur" },
+  { key:'declaration', label:'Déclaration de vente déposée après signature' }
+];
+function saleChecklistAutoStatus(docType){
+  const docsOfType = documents.filter(d=>d.type===docType);
+  if(!docsOfType.length) return { ok:false, text:'Aucun document — à ajouter ci-dessus' };
+  const best = docsOfType.find(d=>docStatus(d.expiration).status==='ok') || docsOfType[0];
+  const st = docStatus(best.expiration);
+  return { ok: st.status==='ok', text: st.label };
+}
+function renderSaleChecklist(){
+  const el = document.getElementById('saleChecklistList'); if(!el) return;
+  el.innerHTML = '';
+  SALE_CHECKLIST_AUTO.forEach(item=>{
+    const st = saleChecklistAutoStatus(item.docType);
+    const row = document.createElement('div'); row.className='checklist-row';
+    row.innerHTML = `<input type="checkbox" disabled ${st.ok?'checked':''}>
+      <div class="cl-label">${item.label}<br><span class="cl-auto">${st.text}</span></div>`;
+    el.appendChild(row);
+  });
+  SALE_CHECKLIST_MANUAL.forEach(item=>{
+    const row = document.createElement('div'); row.className='checklist-row';
+    const checked = !!saleChecklist[item.key];
+    row.innerHTML = `<input type="checkbox" id="chk_${item.key}" ${checked?'checked':''} onchange="toggleSaleChecklist('${item.key}')">
+      <div class="cl-label">${item.label}</div>`;
+    el.appendChild(row);
+  });
+}
+async function toggleSaleChecklist(key){
+  saleChecklist[key] = document.getElementById('chk_'+key).checked;
+  await persistV('sale-checklist', saleChecklist);
+}
 async function addDocument(){
   const type=document.getElementById('dType').value, ref=document.getElementById('dRef').value,
         obtention=document.getElementById('dObtention').value, expiration=document.getElementById('dExpiration').value;
@@ -1260,7 +1317,7 @@ async function saveBudgets(){
 }
 
 function exportData(){
-  const blob = new Blob([JSON.stringify({vehicle,reminders,budgets,fuel,charges,maint,documents,photos}, null, 2)], {type:'application/json'});
+  const blob = new Blob([JSON.stringify({vehicle,reminders,budgets,fuel,charges,maint,documents,photos,saleChecklist}, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href=url; a.download='suivi-vehicule-export.json'; a.click();
 }
@@ -1321,8 +1378,10 @@ async function importData(ev){
     if(d.vehicle) vehicle = d.vehicle; if(d.reminders) reminders = d.reminders; if(d.budgets) budgets = d.budgets;
     if(d.fuel) fuel = d.fuel; if(d.charges) charges = d.charges; if(d.maint) maint = d.maint;
     if(d.documents) documents = d.documents; if(d.photos) photos = d.photos;
+    if(d.saleChecklist) saleChecklist = d.saleChecklist;
     await persistSettings(); await persistV('carburant-entries', fuel); await persistV('charges-entries', charges); await persistV('entretien-entries', maint);
     await persistV('documents-entries', documents); await persistV('photos-entries', photos);
+    await persistV('sale-checklist', saleChecklist);
     renderAll();
   }catch(e){ alert('Fichier invalide.'); }
 }
@@ -1493,6 +1552,7 @@ function renderAll(){
   renderMaintTable();
   renderDocTable();
   renderDocAlerts();
+  renderSaleChecklist();
   renderGallery();
   fillSettingsForm();
   renderStorageUsage();
