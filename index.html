@@ -186,6 +186,28 @@
   .reco .icon{ margin-right:6px; }
   .storagebar{ height:8px; background:#DDD3B9; border-radius:4px; overflow:hidden; margin:8px 0; }
   .storagebar div{ height:100%; background:var(--teal); }
+
+  .print-only{ display:none; }
+  #saleReport{ color:#1C2530; font-family:'Space Grotesk', sans-serif; }
+  #saleReport h1{ font-size:22px; margin-bottom:2px; }
+  #saleReport h2{ font-size:15px; margin:22px 0 8px; border-bottom:2px solid #0F2436; padding-bottom:4px; }
+  #saleReport .rep-sub{ color:#4A5566; font-size:13px; margin-bottom:14px; }
+  #saleReport table{ width:100%; border-collapse:collapse; font-size:12.5px; margin-bottom:6px; min-width:0; }
+  #saleReport th{ text-align:left; background:#EDE6D6; padding:5px 7px; font-size:11px; }
+  #saleReport td{ padding:5px 7px; border-bottom:1px solid #ddd; }
+  #saleReport .rep-stats{ display:flex; gap:24px; margin:10px 0 18px; flex-wrap:wrap; }
+  #saleReport .rep-stat{ }
+  #saleReport .rep-stat .l{ font-size:11px; color:#4A5566; }
+  #saleReport .rep-stat .v{ font-size:19px; font-weight:700; font-family:'IBM Plex Mono',monospace; }
+  #saleReport .rep-photos img{ width:70px; height:52px; object-fit:cover; border-radius:3px; margin-right:4px; }
+  #saleReport .rep-foot{ margin-top:30px; font-size:10.5px; color:#4A5566; border-top:1px solid #ccc; padding-top:8px; }
+
+  @media print{
+    body *{ visibility:hidden; }
+    #saleReport, #saleReport *{ visibility:visible; }
+    #saleReport{ position:absolute; top:0; left:0; width:100%; display:block; padding:20px; }
+    .lightbox{ display:none !important; }
+  }
 </style>
 </head>
 <body>
@@ -193,6 +215,7 @@
   <button class="close" onclick="closeLightbox(event)">✕</button>
   <img id="lightboxImg" src="">
 </div>
+<div id="saleReport" class="print-only"></div>
 
 
 <header>
@@ -404,6 +427,12 @@
           <tbody id="docTable"></tbody>
         </table></div>
         <div class="empty" id="docEmpty" style="display:none;">Aucun document enregistré pour l'instant.</div>
+      </div>
+
+      <div class="panel">
+        <h2>Dossier de vente</h2>
+        <div class="sub">Génère un document de présentation à partir de l'historique complet du véhicule — à imprimer ou enregistrer en PDF pour un acheteur potentiel.</div>
+        <button class="btn" onclick="generateSaleReport()">Générer le dossier de vente</button>
       </div>
     </div>
 
@@ -1053,7 +1082,60 @@ function renderGallery(){
   });
 }
 
-// ---- Recommandations ----
+// ---- Dossier de vente ----
+function generateSaleReport(){
+  const fc = fuelWithCalc();
+  const currentKm = fc.length ? fc[fc.length-1].km : vehicle.kmInitial;
+  const kmParcouru = currentKm - vehicle.kmInitial;
+  const totalFuel = fuel.reduce((s,f)=>s+f.cout,0);
+  const totalCharges = charges.reduce((s,c)=>s+c.montant,0);
+  const totalMaint = maint.reduce((s,m)=>s+(m.montant||0),0);
+  const totalAll = totalFuel+totalCharges+totalMaint;
+  const validConso = fc.filter(f=>f.conso).map(f=>f.conso);
+  const avgConso = validConso.length ? (validConso.reduce((a,b)=>a+b,0)/validConso.length).toFixed(1) : '—';
+  const today = new Date().toLocaleDateString('fr-FR');
+
+  const maintRows = [...maint].sort((a,b)=>a.date.localeCompare(b.date)).map(m=>{
+    const f = m.filtres||{};
+    const filterLabels = {air:'Filtre air',gasoil:'Filtre gasoil',huile:'Filtre huile',habitacle:'Filtre habitacle'};
+    const pieces = [m.pieces, ...Object.keys(filterLabels).filter(k=>f[k]).map(k=>filterLabels[k]), f.autre].filter(Boolean).join(', ');
+    return `<tr><td>${m.date}</td><td>${m.type}</td><td>${pieces||'—'}</td><td>${m.km?fmtKm(m.km):'—'}</td><td>${m.garage||'—'}</td><td>${fmtMAD(m.montant)}</td></tr>`;
+  }).join('') || '<tr><td colspan="6">Aucun entretien enregistré.</td></tr>';
+
+  const docRows = documents.map(d=>{
+    const st = docStatus(d.expiration);
+    return `<tr><td>${d.type}</td><td>${d.ref||'—'}</td><td>${d.expiration||'—'}</td><td>${st.label}</td></tr>`;
+  }).join('') || '<tr><td colspan="4">Aucun document enregistré.</td></tr>';
+
+  const galleryPhotos = photos.slice(0,6).map(p=>`<img src="${p.data}">`).join('');
+
+  document.getElementById('saleReport').innerHTML = `
+    <h1>${vehicle.marque || 'Véhicule'}</h1>
+    <div class="rep-sub">${[vehicle.immat, vehicle.type, vehicle.miseCirculation && ('Mise en circulation '+vehicle.miseCirculation)].filter(Boolean).join(' — ')} · Dossier généré le ${today}</div>
+
+    <div class="rep-stats">
+      <div class="rep-stat"><div class="l">Kilométrage actuel</div><div class="v">${fmtKm(currentKm)}</div></div>
+      <div class="rep-stat"><div class="l">Parcouru depuis achat</div><div class="v">${fmtKm(kmParcouru)}</div></div>
+      <div class="rep-stat"><div class="l">Consommation moyenne</div><div class="v">${avgConso} L/100km</div></div>
+      <div class="rep-stat"><div class="l">Entretien + charges cumulés</div><div class="v">${fmtMAD(totalAll)}</div></div>
+    </div>
+
+    <h2>Historique d'entretien</h2>
+    <table><thead><tr><th>Date</th><th>Type</th><th>Pièces / filtres</th><th>Km</th><th>Garage</th><th>Montant</th></tr></thead>
+    <tbody>${maintRows}</tbody></table>
+
+    <h2>Documents du véhicule</h2>
+    <table><thead><tr><th>Type</th><th>Référence</th><th>Expire</th><th>Statut</th></tr></thead>
+    <tbody>${docRows}</tbody></table>
+
+    ${galleryPhotos ? `<h2>Photos de référence</h2><div class="rep-photos">${galleryPhotos}</div>` : ''}
+
+    <div class="rep-foot">
+      Document généré automatiquement à partir du carnet de suivi du véhicule. Il présente un historique déclaratif d'entretien et ne remplace pas un contrôle technique ou une expertise mécanique indépendante.
+    </div>
+  `;
+  window.print();
+}
 function renderRecommendations(){
   const el = document.getElementById('recoList'); el.innerHTML='';
   const items = [];
