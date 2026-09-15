@@ -15,6 +15,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
   :root{
     --navy: #0F2436;
@@ -428,6 +429,37 @@
 
     <!-- REGLAGES -->
     <div class="view" id="view-reglages">
+
+      <div class="panel" id="syncPanel">
+        <h2>Synchronisation cloud</h2>
+        <div class="sub">Connecte l'app à une base en ligne (Supabase) pour retrouver les mêmes données sur tous tes appareils.</div>
+
+        <div id="syncConfigForm">
+          <div class="form-row">
+            <div class="field" style="flex:2;"><label>Project URL</label><input type="text" id="cfgUrl" placeholder="https://xxxx.supabase.co"></div>
+            <div class="field" style="flex:2;"><label>Clé anonyme (anon public)</label><input type="text" id="cfgKey" placeholder="eyJ..."></div>
+            <button class="btn" onclick="saveCloudConfig()">Enregistrer la configuration</button>
+          </div>
+        </div>
+
+        <div id="syncAuthForm" style="display:none;">
+          <div class="form-row">
+            <div class="field"><label>Email</label><input type="email" id="authEmail"></div>
+            <div class="field"><label>Mot de passe</label><input type="password" id="authPassword"></div>
+            <button class="btn" onclick="signIn()">Se connecter</button>
+            <button class="btn secondary" onclick="signUp()">Créer un compte</button>
+          </div>
+        </div>
+
+        <div id="syncLoggedIn" style="display:none;">
+          <div class="sub">Connecté en tant que <strong id="syncEmail"></strong> — les données sont synchronisées sur tous tes appareils connectés au même compte.</div>
+          <button class="btn secondary small" onclick="signOut()">Se déconnecter</button>
+          <button class="btn secondary small" onclick="resetCloudConfig()" style="color:var(--rust); border-color:var(--rust);">Changer de projet cloud</button>
+        </div>
+
+        <div class="save-note" id="syncNote"></div>
+      </div>
+
       <div class="panel">
         <h2>Fiche véhicule</h2>
         <div class="form-row">
@@ -546,11 +578,32 @@ let charts = {};
 function keyFor(base){ return activeVehicleId==='v1' ? base : base+'::'+activeVehicleId; }
 function keyForId(base, id){ return id==='v1' ? base : base+'::'+id; }
 
+let supabaseClient = null;
+let cloudConfig = null; // {url, anonKey}
+let currentSession = null;
+
 async function persist(key, val){
+  if(supabaseClient && currentSession){
+    try{
+      const { error } = await supabaseClient.from('kv_store').upsert({
+        user_id: currentSession.user.id, key, value: val, updated_at: new Date().toISOString()
+      });
+      if(error){ console.error('supabase persist error', error); return false; }
+      return true;
+    }catch(e){ console.error('supabase persist error', e); return false; }
+  }
   try{ localStorage.setItem('svh:'+key, JSON.stringify(val)); return true; }
   catch(e){ console.error('storage error', e); return false; }
 }
 async function storageGet(key){
+  if(supabaseClient && currentSession){
+    try{
+      const { data, error } = await supabaseClient.from('kv_store').select('value')
+        .eq('user_id', currentSession.user.id).eq('key', key).maybeSingle();
+      if(error){ console.error('supabase get error', error); return null; }
+      return data ? { value: JSON.stringify(data.value) } : null;
+    }catch(e){ console.error('supabase get error', e); return null; }
+  }
   try{ const v = localStorage.getItem('svh:'+key); return v===null ? null : {value:v}; }catch(e){ return null; }
 }
 async function persistV(base, val){ return await persist(keyFor(base), val); }
@@ -1361,9 +1414,17 @@ function renderAll(){
   renderGallery();
   fillSettingsForm();
   renderStorageUsage();
+  renderSyncUI();
 }
 
 function renderStorageUsage(){
+  const bar = document.getElementById('storageBarFill');
+  const label = document.getElementById('storageLabel');
+  if(supabaseClient && currentSession){
+    if(bar){ bar.style.width = '100%'; bar.style.background = 'var(--teal)'; }
+    if(label){ label.textContent = 'Données stockées dans le cloud (Supabase) — pas de limite locale de navigateur.'; }
+    return;
+  }
   let bytes = 0;
   for(let i=0;i<localStorage.length;i++){
     const k = localStorage.key(i);
@@ -1371,13 +1432,99 @@ function renderStorageUsage(){
   }
   const quota = 5 * 1024 * 1024; // estimation prudente (Mo)
   const pct = Math.min(100, Math.round(bytes/quota*100));
-  const bar = document.getElementById('storageBarFill');
-  const label = document.getElementById('storageLabel');
   if(bar){ bar.style.width = pct+'%'; bar.style.background = pct>85 ? 'var(--rust)' : pct>60 ? 'var(--amber)' : 'var(--teal)'; }
-  if(label){ label.textContent = `Espace utilisé : ${(bytes/1024/1024).toFixed(2)} Mo sur ~5 Mo estimés (${pct}%)${pct>75?' — pense à alléger les photos si besoin.':''}`; }
+  if(label){ label.textContent = `Espace utilisé (local) : ${(bytes/1024/1024).toFixed(2)} Mo sur ~5 Mo estimés (${pct}%)${pct>75?' — pense à alléger les photos si besoin.':''}`; }
 }
 
-loadAll();
+// ---- Synchronisation cloud (Supabase) ----
+function loadCloudConfig(){
+  try{ const raw = localStorage.getItem('svh:cloud-config'); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
+}
+function saveCloudConfigLocal(cfg){
+  try{ localStorage.setItem('svh:cloud-config', JSON.stringify(cfg)); }catch(e){}
+}
+function renderSyncUI(){
+  const cfgForm = document.getElementById('syncConfigForm');
+  const authForm = document.getElementById('syncAuthForm');
+  const loggedIn = document.getElementById('syncLoggedIn');
+  if(!cfgForm) return;
+  if(!cloudConfig){
+    cfgForm.style.display=''; authForm.style.display='none'; loggedIn.style.display='none';
+  } else if(!currentSession){
+    cfgForm.style.display='none'; authForm.style.display=''; loggedIn.style.display='none';
+  } else {
+    cfgForm.style.display='none'; authForm.style.display='none'; loggedIn.style.display='';
+    document.getElementById('syncEmail').textContent = currentSession.user.email;
+  }
+}
+async function saveCloudConfig(){
+  const url = document.getElementById('cfgUrl').value.trim();
+  const anonKey = document.getElementById('cfgKey').value.trim();
+  const note = document.getElementById('syncNote');
+  if(!url || !anonKey){ note.textContent = 'Renseigne les deux champs.'; return; }
+  cloudConfig = { url, anonKey };
+  saveCloudConfigLocal(cloudConfig);
+  supabaseClient = supabase.createClient(cloudConfig.url, cloudConfig.anonKey);
+  supabaseClient.auth.onAuthStateChange((_event, sess)=>{ currentSession = sess; renderSyncUI(); });
+  noteOk(note);
+  renderSyncUI();
+}
+async function resetCloudConfig(){
+  if(!confirm("Se déconnecter et retirer la configuration cloud de cet appareil ? Tu pourras la resaisir plus tard.")) return;
+  if(supabaseClient) try{ await supabaseClient.auth.signOut(); }catch(e){}
+  cloudConfig = null; currentSession = null; supabaseClient = null;
+  try{ localStorage.removeItem('svh:cloud-config'); }catch(e){}
+  renderSyncUI();
+  await loadAll();
+}
+async function signUp(){
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  const note = document.getElementById('syncNote');
+  if(!email || !password){ note.textContent='Email et mot de passe requis.'; return; }
+  const { data, error } = await supabaseClient.auth.signUp({ email, password });
+  if(error){ note.textContent = 'Erreur : '+error.message; return; }
+  if(data.session){ currentSession = data.session; renderSyncUI(); await loadAll(); }
+  else note.textContent = "Compte créé — vérifie ta boîte mail pour confirmer, puis connecte-toi.";
+}
+async function signIn(){
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  const note = document.getElementById('syncNote');
+  if(!email || !password){ note.textContent='Email et mot de passe requis.'; return; }
+  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+  if(error){ note.textContent = 'Erreur : '+error.message; return; }
+  currentSession = data.session;
+  renderSyncUI();
+  note.textContent = '';
+  await loadAll();
+}
+async function signOut(){
+  if(supabaseClient) await supabaseClient.auth.signOut();
+  currentSession = null;
+  renderSyncUI();
+  await loadAll();
+}
+
+async function boot(){
+  cloudConfig = loadCloudConfig();
+  if(cloudConfig){
+    try{
+      supabaseClient = supabase.createClient(cloudConfig.url, cloudConfig.anonKey);
+      const { data } = await supabaseClient.auth.getSession();
+      currentSession = data.session;
+      supabaseClient.auth.onAuthStateChange((_event, sess)=>{ currentSession = sess; renderSyncUI(); });
+    }catch(e){ console.error('cloud init error', e); }
+  }
+  renderSyncUI();
+  if(cloudConfig && !currentSession){
+    // en attente de connexion — on affiche quand même la coquille de l'app
+    return;
+  }
+  await loadAll();
+}
+
+boot();
 
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
