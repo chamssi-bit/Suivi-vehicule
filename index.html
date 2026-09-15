@@ -516,11 +516,13 @@
         <div class="form-row">
           <div class="field"><label>Fournisseur</label><input type="text" id="vFournisseur"></div>
           <div class="field"><label>Kilométrage initial</label><input type="number" id="vKmInitial"></div>
+          <div class="field"><label>Kilométrage actuel (odomètre)</label><input type="number" id="vKmActuel" placeholder="mise à jour manuelle"></div>
           <div class="field"><label>Mise en circulation</label><input type="text" id="vMiseCirculation" placeholder="ex. 2011"></div>
           <div class="field"><label>Statut</label>
             <select id="vStatut"><option value="actif">Actif — en circulation</option><option value="vendu">Vendu</option></select>
           </div>
         </div>
+        <div class="sub" style="margin-top:-6px; margin-bottom:14px;">Sert de référence pour la jauge et les alertes si supérieur au dernier plein enregistré — utile si tu ne fais pas le plein régulièrement ou si une saisie carburant est erronée.</div>
         <button class="btn" onclick="saveVehicle()">Enregistrer la fiche</button>
         <div class="save-note" id="vehicleNote"></div>
       </div>
@@ -771,6 +773,11 @@ function fuelWithCalc(){
     prevKm = f.km;
     return {...f, dist, conso, coutKm};
   });
+}
+function getCurrentKm(fc){
+  const list = fc || fuelWithCalc();
+  const fuelKm = list.length ? list[list.length-1].km : vehicle.kmInitial;
+  return Math.max(fuelKm, vehicle.kmActuel||0, vehicle.kmInitial||0);
 }
 function fuelKmIssue(date, km, excludeId){
   const others = fuel.filter(f=>f.id!==excludeId);
@@ -1142,7 +1149,7 @@ function renderGallery(){
 // ---- Dossier de vente ----
 function generateSaleReport(){
   const fc = fuelWithCalc();
-  const currentKm = fc.length ? fc[fc.length-1].km : vehicle.kmInitial;
+  const currentKm = getCurrentKm(fc);
   const kmParcouru = currentKm - vehicle.kmInitial;
   const totalFuel = fuel.reduce((s,f)=>s+f.cout,0);
   const totalCharges = charges.reduce((s,c)=>s+c.montant,0);
@@ -1240,7 +1247,7 @@ function renderRecommendations(){
 
   const lastMaint = lastMaintWithProchain();
   if(lastMaint && lastMaint.prochainKm){
-    const currentKm = fc.length ? fc[fc.length-1].km : vehicle.kmInitial;
+    const currentKm = getCurrentKm(fc);
     if(lastMaint.prochainKm - currentKm <= 500 && lastMaint.prochainKm - currentKm > 0){
       items.push({icon:'🛠️', text:`Plus que ${fmtKm(lastMaint.prochainKm-currentKm)} avant la vidange prévue — pense à réserver un créneau garage.`});
     }
@@ -1264,6 +1271,7 @@ function fillSettingsForm(){
   document.getElementById('vFinancement').value = vehicle.financement||'';
   document.getElementById('vFournisseur').value = vehicle.fournisseur||'';
   document.getElementById('vKmInitial').value = vehicle.kmInitial||'';
+  document.getElementById('vKmActuel').value = vehicle.kmActuel||'';
   document.getElementById('vMiseCirculation').value = vehicle.miseCirculation||'';
   document.getElementById('vStatut').value = vehicle.statut||'actif';
   document.getElementById('rAssurance').value = reminders.assurance.date||'';
@@ -1286,6 +1294,7 @@ async function saveVehicle(){
     type: document.getElementById('vType').value, dateAchat: document.getElementById('vDateAchat').value,
     prix: parseFloat(document.getElementById('vPrix').value)||0, financement: document.getElementById('vFinancement').value,
     fournisseur: document.getElementById('vFournisseur').value, kmInitial: parseFloat(document.getElementById('vKmInitial').value)||0,
+    kmActuel: parseFloat(document.getElementById('vKmActuel').value)||0,
     miseCirculation: document.getElementById('vMiseCirculation').value, statut: document.getElementById('vStatut').value
   };
   await persistSettings(); noteOk(document.getElementById('vehicleNote')); renderAll();
@@ -1399,7 +1408,7 @@ function renderHeader(){
     + `<option value="__new__">+ Nouveau véhicule</option>`;
 
   const fc = fuelWithCalc();
-  const lastKm = fc.length ? fc[fc.length-1].km : vehicle.kmInitial;
+  const lastKm = getCurrentKm(fc);
   document.getElementById('gaugeKm').textContent = fmtKm(lastKm);
 
   const totalFuel = fuel.reduce((s,f)=>s+f.cout,0);
@@ -1446,7 +1455,7 @@ function renderAlerts(){
   const lastMaint = lastMaintWithProchain();
   if(lastMaint && (lastMaint.prochainKm || lastMaint.prochainDate)){
     const fc = fuelWithCalc();
-    const currentKm = fc.length ? fc[fc.length-1].km : vehicle.kmInitial;
+    const currentKm = getCurrentKm(fc);
     let kmRestant = null, joursRestant = null;
     if(lastMaint.prochainKm) kmRestant = lastMaint.prochainKm - currentKm;
     if(lastMaint.prochainDate) joursRestant = Math.round((new Date(lastMaint.prochainDate) - today)/86400000);
